@@ -167,9 +167,22 @@ export default function Dashboard() {
     setAuthError("");
   };
 
+  const isDummyFirebase =
+    !process.env.NEXT_PUBLIC_FIREBASE_API_KEY ||
+    process.env.NEXT_PUBLIC_FIREBASE_API_KEY.includes("Dummy");
+
   const handleEmailSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError("");
+
+    if (isDummyFirebase && email && password) {
+      const demoToken = `test-token-${email.split("@")[0]}`;
+      localStorage.setItem("vitto_auth_token", demoToken);
+      setToken(demoToken);
+      setUser({ email, uid: `user-${Date.now()}` } as any);
+      return;
+    }
+
     try {
       const userCred = await signInWithEmailAndPassword(auth, email, password);
       const idToken = await userCred.user.getIdToken();
@@ -191,6 +204,12 @@ export default function Dashboard() {
 
   const handleGoogleSignIn = async () => {
     setAuthError("");
+
+    if (isDummyFirebase) {
+      setShowGoogleModal(true);
+      return;
+    }
+
     try {
       const userCred = await signInWithPopup(auth, googleProvider);
       const idToken = await userCred.user.getIdToken();
@@ -528,20 +547,6 @@ export default function Dashboard() {
                 <div className="space-y-2">
                   <button
                     type="button"
-                    onClick={() => selectGoogleAccount("avani.shukla@gmail.com", "Avani Shukla")}
-                    className="w-full flex items-center gap-3 p-3 rounded-xl border border-zinc-800 bg-zinc-950 hover:bg-zinc-800 transition text-left"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-indigo-600 text-white font-bold flex items-center justify-center text-xs">
-                      A
-                    </div>
-                    <div className="flex-1 overflow-hidden">
-                      <div className="text-xs font-semibold text-white truncate">Avani Shukla</div>
-                      <div className="text-[11px] text-zinc-400 truncate">avani.shukla@gmail.com</div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
                     onClick={() => selectGoogleAccount("officer.lending@vitto.money", "MSME Credit Officer")}
                     className="w-full flex items-center gap-3 p-3 rounded-xl border border-zinc-800 bg-zinc-950 hover:bg-zinc-800 transition text-left"
                   >
@@ -559,12 +564,26 @@ export default function Dashboard() {
                     onClick={() => selectGoogleAccount("admin@vitto.money", "Vitto Admin")}
                     className="w-full flex items-center gap-3 p-3 rounded-xl border border-zinc-800 bg-zinc-950 hover:bg-zinc-800 transition text-left"
                   >
-                    <div className="w-8 h-8 rounded-full bg-zinc-700 text-white font-bold flex items-center justify-center text-xs">
+                    <div className="w-8 h-8 rounded-full bg-indigo-600 text-white font-bold flex items-center justify-center text-xs">
                       V
                     </div>
                     <div className="flex-1 overflow-hidden">
                       <div className="text-xs font-semibold text-white truncate">Vitto Admin</div>
                       <div className="text-[11px] text-zinc-400 truncate">admin@vitto.money</div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => selectGoogleAccount("risk.analyst@vitto.money", "Portfolio Risk Analyst")}
+                    className="w-full flex items-center gap-3 p-3 rounded-xl border border-zinc-800 bg-zinc-950 hover:bg-zinc-800 transition text-left"
+                  >
+                    <div className="w-8 h-8 rounded-full bg-zinc-700 text-white font-bold flex items-center justify-center text-xs">
+                      R
+                    </div>
+                    <div className="flex-1 overflow-hidden">
+                      <div className="text-xs font-semibold text-white truncate">Portfolio Risk Analyst</div>
+                      <div className="text-[11px] text-zinc-400 truncate">risk.analyst@vitto.money</div>
                     </div>
                   </button>
 
