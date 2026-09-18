@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import {
   auth,
   signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
   signInWithPopup,
   googleProvider,
   signOut,
