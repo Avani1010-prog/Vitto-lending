@@ -94,55 +94,60 @@ export async function POST(
           pDate
         );
 
-        const result = await prisma.$transaction(async (tx) => {
-          const payment = await tx.payment.create({
-            data: {
-              loanId: loan.id,
-              amount: new Decimal(amount).toFixed(2),
-              paymentDate: pDate,
-              idempotencyKey: idempotencyKey || null,
-              notes: notes || null,
-            },
-          });
-
-          if (allocations.length > 0) {
-            await tx.paymentAllocation.createMany({
-              data: allocations.map((alloc) => ({
-                paymentId: payment.id,
-                scheduleId: alloc.scheduleId!,
-                principalAllocated: alloc.principalAllocated.toFixed(2),
-                interestAllocated: alloc.interestAllocated.toFixed(2),
-                totalAllocated: alloc.totalAllocated.toFixed(2),
-              })),
-            });
-          }
-
-          for (const item of updatedSchedule) {
-            await tx.repaymentSchedule.update({
-              where: { id: item.id },
+        const result = await prisma.$transaction(
+          async (tx) => {
+            const payment = await tx.payment.create({
               data: {
-                principalPaid: item.principalPaid.toFixed(2),
-                interestPaid: item.interestPaid.toFixed(2),
-                amountPaid: item.amountPaid.toFixed(2),
-                status: item.status,
+                loanId: loan.id,
+                amount: new Decimal(amount).toFixed(2),
+                paymentDate: pDate,
+                idempotencyKey: idempotencyKey || null,
+                notes: notes || null,
               },
             });
-          }
 
-          const freshLoan = await tx.loan.findUnique({
-            where: { id: loanId },
-            include: {
-              schedule: {
-                orderBy: { instalmentNumber: "asc" },
-              },
-              payments: {
-                orderBy: { paymentDate: "desc" },
-              },
-            },
-          });
+            if (allocations.length > 0) {
+              await tx.paymentAllocation.createMany({
+                data: allocations.map((alloc) => ({
+                  paymentId: payment.id,
+                  scheduleId: alloc.scheduleId!,
+                  principalAllocated: alloc.principalAllocated.toFixed(2),
+                  interestAllocated: alloc.interestAllocated.toFixed(2),
+                  totalAllocated: alloc.totalAllocated.toFixed(2),
+                })),
+              });
+            }
 
-          return { payment, freshLoan };
-        });
+            await Promise.all(
+              updatedSchedule.map((item) =>
+                tx.repaymentSchedule.update({
+                  where: { id: item.id },
+                  data: {
+                    principalPaid: item.principalPaid.toFixed(2),
+                    interestPaid: item.interestPaid.toFixed(2),
+                    amountPaid: item.amountPaid.toFixed(2),
+                    status: item.status,
+                  },
+                })
+              )
+            );
+
+            const freshLoan = await tx.loan.findUnique({
+              where: { id: loanId },
+              include: {
+                schedule: {
+                  orderBy: { instalmentNumber: "asc" },
+                },
+                payments: {
+                  orderBy: { paymentDate: "desc" },
+                },
+              },
+            });
+
+            return { payment, freshLoan };
+          },
+          { maxWait: 15000, timeout: 20000 }
+        );
 
         const freshLoan = result.freshLoan!;
         const position = calculateLoanPosition(

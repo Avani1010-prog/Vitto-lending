@@ -3,7 +3,7 @@ import { InstalmentStatus, LoanPosition, PaymentAllocationResult } from "./types
 
 export interface ScheduleRecord {
   id: string;
-  loanId: string;
+  loanId?: string;
   instalmentNumber: number;
   dueDate: Date;
   principalComponent: Decimal | number | string;

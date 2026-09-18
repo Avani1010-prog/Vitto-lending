@@ -216,6 +216,7 @@ export function recordStorePayment(
     loan.principal,
     loan.schedule.map((s) => ({
       ...s,
+      loanId: loan.id,
       dueDate: new Date(s.dueDate),
     })),
     new Date()

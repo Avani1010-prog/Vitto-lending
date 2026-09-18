@@ -1,7 +1,9 @@
 import * as admin from "firebase-admin";
 
+const adminObj = admin as any;
+
 function getFirebaseAdminApp() {
-  const apps = (admin as any).apps || (admin.default as any)?.apps || [];
+  const apps = adminObj.apps || adminObj.default?.apps || [];
   if (apps && apps.length > 0) {
     return apps[0];
   }
@@ -14,8 +16,8 @@ function getFirebaseAdminApp() {
       ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
       : undefined;
 
-    const initialize = (admin as any).initializeApp || (admin.default as any)?.initializeApp;
-    const credentialCert = (admin as any).credential?.cert || (admin.default as any)?.credential?.cert;
+    const initialize = adminObj.initializeApp || adminObj.default?.initializeApp;
+    const credentialCert = adminObj.credential?.cert || adminObj.default?.credential?.cert;
 
     if (typeof initialize !== "function") {
       return null;
@@ -50,7 +52,7 @@ function getFirebaseAdminApp() {
 
 export function getAdminAuth() {
   getFirebaseAdminApp();
-  const authFn = (admin as any).auth || (admin.default as any)?.auth;
+  const authFn = adminObj.auth || adminObj.default?.auth;
   if (typeof authFn === "function") {
     try {
       return authFn();
