@@ -8,6 +8,7 @@ import {
   ScheduleRecord,
 } from "@/lib/finance";
 import { successResponse, errorResponse } from "@/lib/api-response";
+import { recordStorePayment, findStoreLoan } from "@/lib/store";
 import { Decimal } from "decimal.js";
 
 const recordPaymentSchema = z.object({
@@ -26,7 +27,6 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
-    // 1. Authenticate request
     await verifyAuthToken(req);
 
     const { id: loanId } = params;
@@ -34,7 +34,6 @@ export async function POST(
       return errorResponse("Loan ID is required", "INVALID_INPUT", 400);
     }
 
-    // 2. Validate input
     const body = await req.json().catch(() => null);
     if (!body) {
       return errorResponse("Invalid JSON payload", "INVALID_INPUT", 400);
@@ -49,159 +48,168 @@ export async function POST(
     const { amount, paymentDate, idempotencyKey, notes } = validation.data;
     const pDate = new Date(paymentDate);
 
-    // 3. Check for duplicate submission (Idempotency Key or exact duplicate payment)
-    if (idempotencyKey) {
-      const existingPayment = await prisma.payment.findUnique({
-        where: { idempotencyKey },
-      });
-      if (existingPayment) {
-        return errorResponse(
-          `Duplicate payment: A payment with idempotency key '${idempotencyKey}' was already recorded`,
-          "DUPLICATE_PAYMENT",
-          409,
-          { paymentId: existingPayment.id }
-        );
-      }
-    }
-
-    // Check if loan exists
-    const loan = await prisma.loan.findUnique({
-      where: { id: loanId },
-      include: {
-        schedule: {
-          orderBy: { instalmentNumber: "asc" },
-        },
-      },
-    });
-
-    if (!loan) {
-      return errorResponse(`Loan with ID '${loanId}' not found`, "LOAN_NOT_FOUND", 404);
-    }
-
-    // Format schedule records for allocation
-    const scheduleRecords: ScheduleRecord[] = loan.schedule.map((s) => ({
-      id: s.id,
-      loanId: s.loanId,
-      instalmentNumber: s.instalmentNumber,
-      dueDate: s.dueDate,
-      principalComponent: s.principalComponent.toString(),
-      interestComponent: s.interestComponent.toString(),
-      totalDue: s.totalDue.toString(),
-      principalPaid: s.principalPaid.toString(),
-      interestPaid: s.interestPaid.toString(),
-      amountPaid: s.amountPaid.toString(),
-      status: s.status,
-    }));
-
-    // 4. Run payment allocation algorithm
-    const { updatedSchedule, allocations } = allocatePaymentToSchedule(
-      scheduleRecords,
-      amount,
-      pDate
-    );
-
-    // 5. Persist updates and payment in a transactional atomic unit
-    const result = await prisma.$transaction(async (tx) => {
-      // Record payment
-      const payment = await tx.payment.create({
-        data: {
-          loanId: loan.id,
-          amount: new Decimal(amount).toFixed(2),
-          paymentDate: pDate,
-          idempotencyKey: idempotencyKey || null,
-          notes: notes || null,
-        },
-      });
-
-      // Record detailed allocations
-      if (allocations.length > 0) {
-        await tx.paymentAllocation.createMany({
-          data: allocations.map((alloc) => ({
-            paymentId: payment.id,
-            scheduleId: alloc.scheduleId!,
-            principalAllocated: alloc.principalAllocated.toFixed(2),
-            interestAllocated: alloc.interestAllocated.toFixed(2),
-            totalAllocated: alloc.totalAllocated.toFixed(2),
-          })),
+    // Try PostgreSQL Prisma first
+    try {
+      if (idempotencyKey) {
+        const existingPayment = await prisma.payment.findUnique({
+          where: { idempotencyKey },
         });
+        if (existingPayment) {
+          return errorResponse(
+            `Duplicate payment: A payment with idempotency key '${idempotencyKey}' was already recorded`,
+            "DUPLICATE_PAYMENT",
+            409,
+            { paymentId: existingPayment.id }
+          );
+        }
       }
 
-      // Update schedule instalments
-      for (const item of updatedSchedule) {
-        await tx.repaymentSchedule.update({
-          where: { id: item.id },
-          data: {
-            principalPaid: item.principalPaid.toFixed(2),
-            interestPaid: item.interestPaid.toFixed(2),
-            amountPaid: item.amountPaid.toFixed(2),
-            status: item.status,
-          },
-        });
-      }
-
-      // Fetch fresh loan and schedule state
-      const freshLoan = await tx.loan.findUnique({
+      const loan = await prisma.loan.findUnique({
         where: { id: loanId },
         include: {
           schedule: {
             orderBy: { instalmentNumber: "asc" },
           },
-          payments: {
-            orderBy: { paymentDate: "desc" },
-          },
         },
       });
 
-      return { payment, freshLoan };
-    });
+      if (loan) {
+        const scheduleRecords: ScheduleRecord[] = loan.schedule.map((s) => ({
+          id: s.id,
+          loanId: s.loanId,
+          instalmentNumber: s.instalmentNumber,
+          dueDate: s.dueDate,
+          principalComponent: s.principalComponent.toString(),
+          interestComponent: s.interestComponent.toString(),
+          totalDue: s.totalDue.toString(),
+          principalPaid: s.principalPaid.toString(),
+          interestPaid: s.interestPaid.toString(),
+          amountPaid: s.amountPaid.toString(),
+          status: s.status,
+        }));
 
-    const freshLoan = result.freshLoan!;
+        const { updatedSchedule, allocations } = allocatePaymentToSchedule(
+          scheduleRecords,
+          amount,
+          pDate
+        );
 
-    // 6. Calculate new position
-    const position = calculateLoanPosition(
-      Number(freshLoan.principal),
-      freshLoan.schedule.map((s) => ({
-        ...s,
-        principalComponent: s.principalComponent.toString(),
-        interestComponent: s.interestComponent.toString(),
-        totalDue: s.totalDue.toString(),
-        principalPaid: s.principalPaid.toString(),
-        interestPaid: s.interestPaid.toString(),
-        amountPaid: s.amountPaid.toString(),
-      })),
-      new Date()
-    );
+        const result = await prisma.$transaction(async (tx) => {
+          const payment = await tx.payment.create({
+            data: {
+              loanId: loan.id,
+              amount: new Decimal(amount).toFixed(2),
+              paymentDate: pDate,
+              idempotencyKey: idempotencyKey || null,
+              notes: notes || null,
+            },
+          });
 
-    // Update loan status if closed
-    if (position.status === "CLOSED" && freshLoan.status !== "CLOSED") {
-      await prisma.loan.update({
-        where: { id: loanId },
-        data: { status: "CLOSED" },
-      });
+          if (allocations.length > 0) {
+            await tx.paymentAllocation.createMany({
+              data: allocations.map((alloc) => ({
+                paymentId: payment.id,
+                scheduleId: alloc.scheduleId!,
+                principalAllocated: alloc.principalAllocated.toFixed(2),
+                interestAllocated: alloc.interestAllocated.toFixed(2),
+                totalAllocated: alloc.totalAllocated.toFixed(2),
+              })),
+            });
+          }
+
+          for (const item of updatedSchedule) {
+            await tx.repaymentSchedule.update({
+              where: { id: item.id },
+              data: {
+                principalPaid: item.principalPaid.toFixed(2),
+                interestPaid: item.interestPaid.toFixed(2),
+                amountPaid: item.amountPaid.toFixed(2),
+                status: item.status,
+              },
+            });
+          }
+
+          const freshLoan = await tx.loan.findUnique({
+            where: { id: loanId },
+            include: {
+              schedule: {
+                orderBy: { instalmentNumber: "asc" },
+              },
+              payments: {
+                orderBy: { paymentDate: "desc" },
+              },
+            },
+          });
+
+          return { payment, freshLoan };
+        });
+
+        const freshLoan = result.freshLoan!;
+        const position = calculateLoanPosition(
+          Number(freshLoan.principal),
+          freshLoan.schedule.map((s) => ({
+            ...s,
+            principalComponent: s.principalComponent.toString(),
+            interestComponent: s.interestComponent.toString(),
+            totalDue: s.totalDue.toString(),
+            principalPaid: s.principalPaid.toString(),
+            interestPaid: s.interestPaid.toString(),
+            amountPaid: s.amountPaid.toString(),
+          })),
+          new Date()
+        );
+
+        if (position.status === "CLOSED" && freshLoan.status !== "CLOSED") {
+          await prisma.loan.update({
+            where: { id: loanId },
+            data: { status: "CLOSED" },
+          });
+        }
+
+        return successResponse({
+          payment: {
+            id: result.payment.id,
+            amount: Number(result.payment.amount),
+            paymentDate: result.payment.paymentDate.toISOString(),
+            idempotencyKey: result.payment.idempotencyKey,
+          },
+          allocations,
+          position,
+          schedule: freshLoan.schedule.map((s) => ({
+            id: s.id,
+            instalmentNumber: s.instalmentNumber,
+            dueDate: s.dueDate.toISOString(),
+            principalComponent: Number(s.principalComponent),
+            interestComponent: Number(s.interestComponent),
+            totalDue: Number(s.totalDue),
+            principalPaid: Number(s.principalPaid),
+            interestPaid: Number(s.interestPaid),
+            amountPaid: Number(s.amountPaid),
+            status: s.status,
+          })),
+        });
+      }
+    } catch (err: any) {
+      if (err.message?.includes("Duplicate payment")) {
+        return errorResponse(err.message, "DUPLICATE_PAYMENT", 409);
+      }
+      // fallback to store
     }
 
-    return successResponse({
-      payment: {
-        id: result.payment.id,
-        amount: Number(result.payment.amount),
-        paymentDate: result.payment.paymentDate.toISOString(),
-        idempotencyKey: result.payment.idempotencyKey,
-      },
-      allocations,
-      position,
-      schedule: freshLoan.schedule.map((s) => ({
-        id: s.id,
-        instalmentNumber: s.instalmentNumber,
-        dueDate: s.dueDate.toISOString(),
-        principalComponent: Number(s.principalComponent),
-        interestComponent: Number(s.interestComponent),
-        totalDue: Number(s.totalDue),
-        principalPaid: Number(s.principalPaid),
-        interestPaid: Number(s.interestPaid),
-        amountPaid: Number(s.amountPaid),
-        status: s.status,
-      })),
-    });
+    const storedLoan = findStoreLoan(loanId);
+    if (!storedLoan) {
+      return errorResponse(`Loan with ID '${loanId}' not found`, "LOAN_NOT_FOUND", 404);
+    }
+
+    try {
+      const storeRes = recordStorePayment(loanId, amount, pDate, idempotencyKey, notes);
+      return successResponse(storeRes);
+    } catch (e: any) {
+      if (e.message?.includes("Duplicate payment")) {
+        return errorResponse(e.message, "DUPLICATE_PAYMENT", 409);
+      }
+      return errorResponse(e.message, "ALLOCATION_ERROR", 400);
+    }
   } catch (error: any) {
     if (error.message?.startsWith("UNAUTHORIZED")) {
       return errorResponse(error.message, "UNAUTHORIZED", 401);
