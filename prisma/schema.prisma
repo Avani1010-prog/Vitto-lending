@@ -1,0 +1,78 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Loan {
+  id                 String              @id @default(cuid())
+  principal          Decimal             @db.Decimal(14, 2)
+  annualInterestRate Decimal             @db.Decimal(5, 2)
+  tenureMonths       Int
+  disbursementDate   DateTime
+  monthlyEmi         Decimal             @db.Decimal(14, 2)
+  totalPrincipalPaid Decimal             @default(0.00) @db.Decimal(14, 2)
+  totalInterestPaid  Decimal             @default(0.00) @db.Decimal(14, 2)
+  status             String              @default("ACTIVE") // ACTIVE, CLOSED
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  schedule           RepaymentSchedule[]
+  payments           Payment[]
+
+  @@map("loans")
+}
+
+model RepaymentSchedule {
+  id                 String              @id @default(cuid())
+  loanId             String
+  loan               Loan                @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  instalmentNumber   Int
+  dueDate            DateTime
+  principalComponent Decimal             @db.Decimal(14, 2)
+  interestComponent  Decimal             @db.Decimal(14, 2)
+  totalDue           Decimal             @db.Decimal(14, 2)
+  principalPaid      Decimal             @default(0.00) @db.Decimal(14, 2)
+  interestPaid       Decimal             @default(0.00) @db.Decimal(14, 2)
+  amountPaid         Decimal             @default(0.00) @db.Decimal(14, 2)
+  status             String              @default("PENDING") // PENDING, PARTIALLY_PAID, PAID, OVERDUE
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  allocations        PaymentAllocation[]
+
+  @@unique([loanId, instalmentNumber])
+  @@map("repayment_schedules")
+}
+
+model Payment {
+  id             String              @id @default(cuid())
+  loanId         String
+  loan           Loan                @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  amount         Decimal             @db.Decimal(14, 2)
+  paymentDate    DateTime
+  idempotencyKey String?             @unique
+  notes          String?
+  createdAt      DateTime            @default(now())
+
+  allocations    PaymentAllocation[]
+
+  @@map("payments")
+}
+
+model PaymentAllocation {
+  id                 String            @id @default(cuid())
+  paymentId          String
+  payment            Payment           @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  scheduleId         String
+  schedule           RepaymentSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  principalAllocated Decimal           @db.Decimal(14, 2)
+  interestAllocated  Decimal           @db.Decimal(14, 2)
+  totalAllocated     Decimal           @db.Decimal(14, 2)
+  createdAt          DateTime          @default(now())
+
+  @@map("payment_allocations")
+}
