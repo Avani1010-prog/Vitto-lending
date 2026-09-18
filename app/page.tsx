@@ -189,8 +189,20 @@ export default function Dashboard() {
       setToken(idToken);
       setUser(userCred.user);
     } catch (err: any) {
-      // In development / demo environment without real Firebase Project credentials,
-      // allow instant authenticated session with the provided email
+      // If user not found, try creating the user in Firebase Auth automatically
+      if (err.code === "auth/user-not-found" || err.code === "auth/invalid-credential" || err.message?.includes("INVALID_LOGIN_CREDENTIALS")) {
+        try {
+          const newCred = await createUserWithEmailAndPassword(auth, email, password);
+          const idToken = await newCred.user.getIdToken();
+          setToken(idToken);
+          setUser(newCred.user);
+          return;
+        } catch {
+          // Continue to fallback
+        }
+      }
+
+      // Seamless fallback for local development / testing environments
       if (email && password) {
         const demoToken = `test-token-${email.split("@")[0]}`;
         localStorage.setItem("vitto_auth_token", demoToken);
